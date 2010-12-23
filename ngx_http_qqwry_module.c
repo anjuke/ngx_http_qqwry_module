@@ -166,44 +166,63 @@ ngx_http_qqwry_real_addr(ngx_http_request_t *r, ngx_http_qqwry_ctx_t *qqwry)
     return ntohl(ngx_inet_addr(v->data, v->len));
 }
 
+static ngx_int_t
+ngx_http_qqwry_is_public_addr(in_addr_t addr) {
+    static uint32_t proxies_mask[] = {0xff000000, 0xfff00000, 0xffff0000, 0x0f000000, 0xffffffff};
+    static uint32_t proxies_addr[] = {0x0A000000, 0xAC100000, 0xC0A80000, 0x0F000000, 0xFFFFFFFF};
+    ngx_int_t i;
+    
+    for (i = 0; i < 5; i++) {
+        if ((addr & proxies_mask[i]) == proxies_addr[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static in_addr_t
 ngx_http_qqwry_addr(ngx_http_request_t *r, ngx_http_qqwry_ctx_t *qqwry)
 {
-    u_char           *p, *ip;
+    u_char           *ip;
+    u_char           *p;
+    u_char           *pe;
     size_t            len;
     in_addr_t         addr;
-    ngx_uint_t        i;
+    in_addr_t         addr_tmp;
     ngx_table_elt_t  *xfwd;
     
-    addr = ngx_http_qqwry_real_addr(r, qqwry);
-    
+    addr = ngx_http_qqwry_real_addr(r, qqwry);    
+    //if (ngx_http_qqwry_is_public_addr(addr)) {
+    //    return addr;
+    //}
+
     xfwd = r->headers_in.x_forwarded_for;
-    
     if (xfwd == NULL) {
         return addr;
     }
     
-    static uint32_t proxies_mask[] = {0xff000000, 0xfff00000, 0xffff0000};
-    static uint32_t proxies_addr[] = {0x0A000000, 0xAC100000, 0xC0A80000};    
-    
-    for (i = 0; i < 3; i++) {
-        if ((addr & proxies_mask[i]) == proxies_addr[i]) {            
-            len = xfwd->value.len;
-            ip = xfwd->value.data;
-            
-            for (p = ip + len - 1; p > ip; p--) {
-                if (*p == ' ' || *p == ',') {
-                    p++;
-                    len -= p - ip;
-                    ip = p;
-                    break;
-                }
-            }
-            
-            return ntohl(ngx_inet_addr(ip, len));
+    for (pe = xfwd->value.data + xfwd->value.len; pe > xfwd->value.data && (*pe < '0' || *pe > '9'); pe--);
+    p = pe - 1;
+    while (p >= xfwd->value.data) {
+        if ((*p < '0' || *p > '9') && *p != '.') {
+            len = pe - p;
+            ip = p + 1;
+        } else if (p == xfwd->value.data) {
+            len = pe - p + 1;
+            ip = p;
+        } else {
+            p--;
+            continue;
         }
+            
+        addr_tmp = ntohl(ngx_inet_addr(ip, len));
+        if (ngx_http_qqwry_is_public_addr(addr_tmp)) {
+            return addr_tmp;
+        }
+        for (pe = p; pe > xfwd->value.data && (*pe < '0' || *pe > '9'); pe--);
+        p = pe - 1;
     }
-    
+
     return addr;
 }
 
@@ -238,7 +257,7 @@ ngx_http_qqwry_variable(ngx_http_request_t *r, ngx_http_variable_value_t *v, uin
     v->no_cacheable = 0;
     v->not_found = 0;        
     
-    ngx_log_debug1(NGX_LOG_ALERT, r->connection->log, 0, "ngx_http_qqwry_variable: %v, ", v);
+    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_qqwry_variable: %v, ", v);
     
     return NGX_OK;    
 }
